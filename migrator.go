@@ -84,34 +84,47 @@ func (m *Migrator) Init(client *kivik.Client, dbPrefix string) (oldVersion int64
 		}
 	}
 
+	shouldCreateIndex := err == nil
+
 	db := client.DB(context.TODO(), dbPrefix+"_migrations")
 	if err = db.Err(); err != nil {
 		return
 	}
 
+	if shouldCreateIndex {
+		index := map[string]interface{}{"fields": []interface{}{"version"}}
+		if err = db.CreateIndex(context.TODO(), "", "", index); err != nil {
+			return
+		}
+	}
+
 	var rows *kivik.Rows
-	rows, err = db.Find(context.TODO(), map[string]interface{}{"version": 0}, kivik.Options{"limit": 1})
+	query := map[string]interface{}{
+		"selector": map[string]interface{}{
+			"version": 0,
+		},
+		"limit": 1,
+	}
+
+	rows, err = db.Find(context.TODO(), query)
 	if err != nil {
 		return
 	} else if err = rows.Err(); err != nil {
 		return
 	}
 
-	err = func() error {
-		defer rows.Close()
+	for rows.Next() {
+		var m migration.Migration
 
-		for rows.Next() {
-			var m migration.Migration
-
-			if err := rows.ScanDoc(&m); err != nil {
-				return err
-			} else {
-				return ErrorMigrationsDatabaseAlreadyExists
-			}
+		if err = rows.ScanDoc(&m); err != nil {
+			break
+		} else {
+			err = ErrorMigrationsDatabaseAlreadyExists
+			break
 		}
+	}
 
-		return nil
-	}()
+	rows.Close()
 
 	if err != nil {
 		return
@@ -129,7 +142,17 @@ func (m *Migrator) Up(client *kivik.Client, dbPrefix string, target int64) (oldV
 		return
 	}
 
-	opts := kivik.Options{"sort": map[string]interface{}{"version": "asc"}}
+	query := map[string]interface{}{
+		"selector": map[string]interface{}{
+			"version": map[string]interface{}{
+				"$gt": -1,
+			},
+		},
+		"sort": []interface{}{
+			map[string]interface{}{"version": "asc"},
+		},
+	}
+
 	history := []migration.Migration{}
 
 	filler := func(item *migration.Migration) bool {
@@ -139,7 +162,7 @@ func (m *Migrator) Up(client *kivik.Client, dbPrefix string, target int64) (oldV
 		return true
 	}
 
-	if err = m.findManyDocuments(db, filler, map[string]interface{}{}, opts); err != nil {
+	if err = m.findManyDocuments(db, filler, query); err != nil {
 		return
 	}
 
@@ -179,10 +202,20 @@ func (m *Migrator) Down(client *kivik.Client, dbPrefix string) (oldVersion int64
 		return
 	}
 
-	opts := kivik.Options{"sort": map[string]interface{}{"version": "desc", "limit": 1}}
+	query := map[string]interface{}{
+		"selector": map[string]interface{}{
+			"version": map[string]interface{}{
+				"$gt": -1,
+			},
+		},
+		"sort": []interface{}{
+			map[string]interface{}{"version": "desc"},
+		},
+		"limit": 1,
+	}
 	var old *migration.Migration
 
-	old, err = m.findOneDocument(db, map[string]interface{}{}, opts)
+	old, err = m.findOneDocument(db, query)
 	if err != nil {
 		return
 	}
@@ -220,7 +253,17 @@ func (m *Migrator) Reset(client *kivik.Client, dbPrefix string) (oldVersion int6
 		return
 	}
 
-	opts := kivik.Options{"sort": map[string]interface{}{"version": "asc"}}
+	query := map[string]interface{}{
+		"selector": map[string]interface{}{
+			"version": map[string]interface{}{
+				"$gt": -1,
+			},
+		},
+		"sort": []interface{}{
+			map[string]interface{}{"version": "asc"},
+		},
+	}
+
 	history := []migration.Migration{}
 
 	filler := func(item *migration.Migration) bool {
@@ -230,7 +273,7 @@ func (m *Migrator) Reset(client *kivik.Client, dbPrefix string) (oldVersion int6
 		return true
 	}
 
-	if err = m.findManyDocuments(db, filler, map[string]interface{}{}, opts); err != nil {
+	if err = m.findManyDocuments(db, filler, query); err != nil {
 		return
 	}
 
@@ -268,7 +311,13 @@ func (m *Migrator) Reset(client *kivik.Client, dbPrefix string) (oldVersion int6
 		if migr.Version > 0 {
 			var mig *migration.Migration
 
-			mig, err = m.findOneDocument(db, map[string]interface{}{"version": migr.Version})
+			query := map[string]interface{}{
+				"selector": map[string]interface{}{
+					"version": migr.Version,
+				},
+			}
+
+			mig, err = m.findOneDocument(db, query)
 			if err != nil {
 				return
 			}
@@ -289,10 +338,20 @@ func (m *Migrator) Version(client *kivik.Client, dbPrefix string) (oldVersion in
 		return
 	}
 
-	opts := kivik.Options{"sort": map[string]interface{}{"version": "desc"}}
+	query := map[string]interface{}{
+		"selector": map[string]interface{}{
+			"version": map[string]interface{}{
+				"$gt": -1,
+			},
+		},
+		"sort": []interface{}{
+			map[string]interface{}{"version": "desc"},
+		},
+	}
+
 	var mig *migration.Migration
 
-	mig, err = m.findOneDocument(db, map[string]interface{}{}, opts)
+	mig, err = m.findOneDocument(db, query)
 	if err != nil {
 		return
 	}
@@ -343,7 +402,7 @@ func (m *Migrator) SetVersion(client *kivik.Client, dbPrefix string, target int6
 		return true
 	}
 
-	if err = m.findManyDocuments(db, filler, map[string]interface{}{}); err != nil {
+	if err = m.findManyDocuments(db, filler, map[string]interface{}{"selector": map[string]interface{}{}}); err != nil {
 		return
 	}
 
