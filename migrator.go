@@ -3,6 +3,7 @@ package migrator
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sort"
 	"strconv"
 
@@ -73,9 +74,14 @@ func (m *Migrator) Init(client *kivik.Client, dbPrefix string) (oldVersion int64
 	migr := &migration.Migration{Name: "-"}
 
 	if err = client.CreateDB(context.TODO(), dbPrefix+"_migrations"); err != nil {
-		// ToDo: handle duplication error
-		// err = ErrorMigrationsDatabaseAlreadyExists
-		return
+		switch kivik.StatusCode(err) {
+		case http.StatusPreconditionFailed:
+			err = ErrorMigrationsDatabaseAlreadyExists
+		}
+
+		if err != ErrorMigrationsDatabaseAlreadyExists {
+			return
+		}
 	}
 
 	db := client.DB(context.TODO(), dbPrefix+"_migrations")
